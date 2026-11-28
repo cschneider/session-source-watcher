@@ -317,11 +317,16 @@ urgency from the subscription policy:
 
 | Urgency | Delivery |
 | --- | --- |
-| `immediate` | Delivered at the session's next opportunity, waking it when the tier allows |
-| `batched` | Collected for a digest window, then delivered as one packet |
+| `immediate` | Sent as a message to the session right away, starting a turn |
+| `batched` | Collected for a digest window, then sent as one message |
 | `passive` | Recorded and visible in the UI and `watch_pending`, never wakes the session |
 
 ## Delivery
+
+When the watcher observes a meaningful change, it sends a message into the
+owning session through the harness adapter. The message starts a turn in that
+exact conversation, so the agent reacts without anyone polling from inside the
+session. A packet is the content of one such message.
 
 ### Packets
 
@@ -351,7 +356,7 @@ sequenceDiagram
     alt Accepted
         HA-->>Dl: Receipt
         Dl->>St: Mark admitted
-        HA->>S: Inject at next turn boundary
+        HA->>S: Message starts a turn (next boundary if busy)
         S->>HA: watch_ack(events, outcome)
         HA->>St: Record acknowledgment
     else Ambiguous (timeout, crash)
@@ -456,7 +461,9 @@ refreshes and restarts never resurrect removed subscriptions.
 
 ## Harness portability
 
-Each adapter declares capabilities: delivery tier (wake, next turn, pull),
+Sending a message that starts a turn in the exact session is the target
+delivery mode. Each adapter declares capabilities: delivery tier (message,
+or the next-turn and pull fallbacks),
 availability inspection, admission receipts and reconciliation, write
 reporting, context updates, bridged tool execution and embedded UI.
 Unsupported capabilities remain explicit and degrade to the next tier.
@@ -537,8 +544,8 @@ before investing in many source adapters.
 
 ## Open questions
 
-- Which harnesses publicly support exact-session wakeups and admission
-  receipts, and which fall back to next-turn or pull delivery.
+- Which harnesses publicly support sending a message into an exact session,
+  with admission receipts, and which fall back to next-turn or pull delivery.
 - Default digest window and update size budget, to be tuned with real usage.
 - Whether push hints justify a local webhook receiver or remain limited to
   file system events at first.

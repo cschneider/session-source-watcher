@@ -68,8 +68,8 @@ sequenceDiagram
     Note over S,W: Polling runs outside the model, zero tokens while nothing changes
 
     G-->>W: Review requests changes, check fails
-    W->>H: Admit update pk-1 (events ev-301, ev-302)
-    H->>S: Inject at next turn boundary
+    W->>H: Send message pk-1 (events ev-301, ev-302)
+    H->>S: Message starts a turn in this session
     S->>G: Push fix, reply in review thread
     H->>W: Report session writes (commit, reply)
     S->>W: watch_ack(pk-1, handled)
@@ -79,8 +79,8 @@ sequenceDiagram
     Note over W: Correlated with reported writes, suppressed
 
     G-->>W: Pull request merged
-    W->>H: Admit update pk-2 (final)
-    H->>S: Inject
+    W->>H: Send message pk-2 (final)
+    H->>S: Message starts a turn in this session
     S->>W: watch_ack(pk-2, handled)
     Note over W: Completion condition met, w-7 completed
     S-->>U: Merged, stopped watching
@@ -99,7 +99,7 @@ write returns the current state instead of overwriting a concurrent change.
 | `watch_update` | Change categories, cadence, urgency or expiry |
 | `watch_pause` / `watch_resume` | Stop or restart collection and delivery without losing the watch |
 | `watch_remove` | Remove a watch; leaves a tombstone so it is not silently re-added |
-| `watch_pending` | Retrieve unacknowledged updates, for harnesses that cannot inject them |
+| `watch_pending` | Retrieve unacknowledged changes, for harnesses that cannot receive watcher messages |
 | `watch_ack` | Acknowledge exact events of an update with an outcome |
 | `watch_expect` | Declare writes the session made, when the harness cannot report them itself |
 
@@ -134,11 +134,16 @@ never from a tool argument.
   `"assess"` delivers existing content once, for an explicit request such as
   "check the open review comments and keep watching".
 
-## Update format
+## Change messages
 
-An update is a bounded, deterministic summary of changes for one session. It
-is rendered without a model, links to the full evidence, and is framed as
-untrusted content.
+When the watcher observes a meaningful change, it sends a message into the
+owning session. The message arrives like a new turn in that exact conversation
+and wakes the agent; nothing in the session polls for it. If the agent is busy,
+the message is admitted at the next turn boundary.
+
+A change message is a bounded, deterministic summary of changes for one
+session. It is rendered without a model, links to the full evidence, and is
+framed as untrusted content.
 
 ```text
 <watch-update packet="pk-1" trust="untrusted-external-content">
@@ -189,14 +194,18 @@ explicit opt-in per watch.
 
 ## Delivery by harness capability
 
-| Capability tier | How updates arrive | User controls |
-| --- | --- | --- |
-| Wake | The adapter starts a turn in the exact session when an immediate update is ready | Embedded panel or local dashboard |
-| Next turn | Updates are attached to, or retrieved at, the session's next turn | Local dashboard |
-| Pull | The agent calls `watch_pending`; the dashboard shows what is waiting | Local dashboard |
+Sending a message into the session is the intended interaction, and every
+harness adapter aims for it. Harnesses that cannot accept external messages
+fall back to weaker tiers:
 
-Each adapter declares its tier. A session in the pull tier still gets durable,
-coverage-aware updates; only the timing differs.
+| Capability tier | How changes arrive | User controls |
+| --- | --- | --- |
+| Message (target) | The watcher sends a message that starts a turn in the exact session | Embedded panel or local dashboard |
+| Next turn (fallback) | Pending changes are attached to the session's next user turn | Local dashboard |
+| Pull (fallback) | The agent calls `watch_pending`; the dashboard shows what is waiting | Local dashboard |
+
+Each adapter declares its tier. Fallback tiers still get durable,
+coverage-aware changes; only the moment the agent sees them differs.
 
 ## The watch list
 

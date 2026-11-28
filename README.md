@@ -13,9 +13,10 @@ that the agent keeps for you. When the agent opens a pull request, starts a
 build or asks someone a question, it adds a watch on its own, and removes it
 again when the work is done. You do not have to ask. A local service checks
 those resources outside the model, by polling them or listening for events,
-notices meaningful changes, and only then hands the owning session one compact,
-durable update. The session
-decides what to do, with the same permissions it already has. You can see,
+and the moment it observes a meaningful change, it sends the owning session a
+message. The message arrives in the conversation like a new turn, and the agent
+picks the work back up with its full history and context. The session decides
+what to do, with the same permissions it already has. You can see,
 change, pause and remove every watch at any time.
 
 ## Waiting costs no tokens
@@ -31,11 +32,11 @@ model tokens.
 | Who checks | The model, in a turn | A local service, outside the model |
 | Cost per unchanged check | A model turn: prompt, context and tool output tokens | One conditional request, no tokens |
 | Cost while nothing happens for hours | Grows with every check | Zero tokens |
-| When tokens are spent | Every check | Only when a meaningful change is delivered |
+| When tokens are spent | Every check | Only when the watcher sends the session a message |
 | What the model reads | Full tool output each time | A compact summary of what changed |
 
-The model wakes up only for an update worth reading, and that update is already
-reduced to the changes that matter.
+The model wakes up only when the watcher sends it a message worth reading, and
+that message is already reduced to the changes that matter.
 
 **Status:** Proposed. This repository contains the architecture and a
 TypeScript build scaffold. No watcher service, source adapters, MCP server or
@@ -52,7 +53,8 @@ Agent  Opened example/project#42. I'm watching its reviews and checks until
        ... two hours pass: the watcher checks every few minutes outside the
            model; zero tokens are spent ...
 
-Watch  w-7 · example/project#42 · 2 changes · coverage complete
+Watcher (message to the session)
+       w-7 · example/project#42 · 2 changes · coverage complete
        1. Review: changes requested by @reviewer on src/cache.ts:88
           "The cache key ignores the locale."
        2. Check unit-tests: passed -> failed
@@ -63,15 +65,17 @@ Agent  The reviewer is right, and the failing test is the same bug: the key
 
        ... the agent's own reply and push are recognised and not echoed back ...
 
-Watch  w-7 · example/project#42 merged by @maintainer.
+Watcher (message to the session)
+       w-7 · example/project#42 merged by @maintainer.
 
 Agent  Merged. Nothing left to follow, so I stopped watching it.
                                                        [watch w-7 completed]
 ```
 
 Nobody asked for a watch: the agent added one because it was now waiting on a
-review, and cleared it when the pull request merged. The update arrived in the
-session that opened the pull request, with its history and context. The
+review, and cleared it when the pull request merged. When the review came in,
+the watcher sent a message straight into the session that opened the pull
+request, with its history and context. The
 model ran only when there was something to react to. The watcher did not decide to push code; the user's
 request did.
 
@@ -95,7 +99,7 @@ flowchart LR
     S -->|adds and clears watches,<br/>acknowledges updates| W[Watcher service]
     UI --> W
     W -->|"polls or listens<br/>outside the model, no tokens"| R[(Issues, PRs, builds,<br/>threads, files)]
-    W -->|only on meaningful change:<br/>one compact update| S
+    W -->|"on change: sends a message<br/>into the session"| S
 ```
 
 1. **Watch.** The agent adds a watch whenever it starts or waits on
@@ -107,9 +111,12 @@ flowchart LR
 3. **Wait without tokens.** The watcher polls with conditional requests and
    cursors, or listens for events, entirely outside the model. Unchanged
    checks only update freshness and never start a model turn.
-4. **Deliver.** Meaningful changes are coalesced into one update for the owning
-   session, at a turn boundary, with exact event IDs.
-5. **Assess and acknowledge.** The session interprets the update under its
+4. **Message the session.** When the watcher observes a meaningful change, it
+   sends the owning session a message: one compact summary of everything that
+   changed, with exact event IDs. The message starts a turn in that exact
+   conversation; if the agent is mid-turn, it arrives at the next turn
+   boundary.
+5. **Assess and acknowledge.** The session interprets the message under its
    existing permissions and acknowledges it. Unacknowledged work is kept, not
    lost.
 6. **Clean up.** A watch ends by itself when its resource reaches a final
