@@ -10,10 +10,27 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --disable-warning=ExperimentalWarning --test --test-reporter=spec \".test-build/test/**/*.test.js\"",
+    "package:copilot": "node scripts/package-copilot.mjs",
+    "test:e2e": "npm run package:copilot && node test/e2e/copilot-extension.mjs",
+    "install:copilot": "npm run package:copilot && node scripts/install-copilot.mjs",
+    "test:live": "npm run package:copilot && node --disable-warning=ExperimentalWarning test/live/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.25.12",
     "typescript": "^5.9.0"
-  }
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "bin": {
+    "ssw": "dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ]
 }
