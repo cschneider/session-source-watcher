@@ -3,7 +3,8 @@
 **Status:** Proposed. This page describes the planned adapter for GitHub
 Copilot (Copilot CLI and the GitHub Copilot app). It is built only on the
 public Copilot extension SDK (`@github/copilot-sdk/extension`). Verify the
-current SDK reference before implementation; the code below is a sketch.
+current SDK reference before implementation; the code below is a sketch. The
+implementation-level design is [Copilot plugin design](../design/copilot-plugin.md).
 
 Copilot reaches the **message** tier: when the watcher observes a change, the
 adapter sends a message into the exact conversation that owns the watch, and
@@ -33,11 +34,14 @@ closed.
 | Adapter responsibility | Copilot mechanism |
 | --- | --- |
 | Session binding | `joinSession()` joins the conversation that loaded the extension; `session.sessionId` is the native session ID |
-| Watch tools for the agent | `tools: [...]` passed to `joinSession`, each handler forwarding to the daemon |
-| Sending a change message | `session.send({ prompt, mode, displayPrompt })` |
-| Admission receipt | The request ID returned by `session.send` |
-| Lifecycle | `session.on(event)`: `session.start`, `session.resume`, `session.idle`, `session.shutdown` |
-| Own-write reporting | `hooks.onPostToolUse`, matching tool results against watched resources |
+| Watch tools for the agent | `tools: { definitions: [...] }` passed to `joinSession`, each handler forwarding to the daemon |
+| Sending a change message | `session.send({ prompt, mode, displayPrompt, source, clientTurnId })` |
+| Admission receipt | The message ID returned by `session.send` |
+| Consumption and reconciliation | `user.message` events echo the packet ID as `clientTurnId` when the message is consumed; `session.getEvents()` finds them after restarts |
+| Completion | `hooks.onAgentStop`, or an `abort` event, after consumption |
+| Teaching the agent when to watch | `hooks.onSessionStart` returning `additionalContext` |
+| Lifecycle | `hooks.onSessionStart` and `session.on(event)` for `user.message`, `abort` and `session.shutdown` |
+| Own-write reporting | `hooks.onPostToolUse`, for recognized mutating commands on watched resources |
 | User controls | A canvas created with `createCanvas`, shown as a side panel in the Copilot app |
 
 ## Packaging
@@ -83,7 +87,7 @@ const forward = (name) => async (args) =>
   daemon.call(name, { binding: daemon.binding, args });
 
 session = await joinSession({
-  tools: [
+  tools: { definitions: [
     { name: "watch_add", description: "Watch a resource this session is waiting on.",
       parameters: watchAddSchema, handler: forward("watch_add") },
     { name: "watch_list", description: "List this session's watches.",
@@ -91,8 +95,8 @@ session = await joinSession({
     { name: "watch_ack", description: "Acknowledge exact events of a watcher message.",
       parameters: watchAckSchema, handler: forward("watch_ack") },
     // watch_update, watch_pause, watch_resume, watch_remove, watch_pending, watch_expect
-  ],
-  canvases: [watchListCanvas],
+  ] },
+  canvases: { definitions: [watchListCanvas] },
   hooks: {
     onPostToolUse: (input) => daemon.reportWrites(extractWatchedWrites(input)),
   },
@@ -109,6 +113,8 @@ daemon.onPacket(async (packet) => {
       prompt: packet.text,                                // framed as untrusted content
       displayPrompt: packet.title,                        // e.g. "Watcher: 2 changes on #42"
       mode: packet.urgency === "immediate" ? "immediate" : "enqueue",
+      source: "automation-session-source-watcher",        // no human authority
+      clientTurnId: packet.id,                            // for reconciliation
     });
     return id ? { status: "admitted", receipt: id }
               : { status: "unknown", reason: "no request ID returned" };
@@ -128,27 +134,36 @@ sequenceDiagram
     participant M as Agent
 
     D->>X: Packet pk-1 for this session
-    X->>S: session.send(prompt, mode)
-    S-->>X: Request ID
-    X-->>D: Admitted, receipt = request ID
-    S->>M: Message starts a turn
+    X->>S: session.send(prompt, mode, clientTurnId = pk-1)
+    S-->>X: Message ID
+    X-->>D: Admitted, receipt = message ID
+    S-->>X: user.message with clientTurnId pk-1
+    X-->>D: Consumed
+    S->>M: The agent works on the change
     M->>X: watch_ack(pk-1, handled)
     X->>D: Acknowledge ev-301, ev-302
-    S-->>X: session.idle
-    X-->>D: Lifecycle idle, next packet may be sent
+    S-->>X: onAgentStop
+    X-->>D: Completed, next packet may be sent
 ```
 
-- **Send modes.** `immediate` urgency uses `mode: "immediate"`, which is
-  admitted at the next turn boundary ahead of queued work. `batched` uses
-  `mode: "enqueue"`, which waits behind work already pending. Neither mode
-  interrupts a turn in progress.
-- **One outstanding message.** The daemon sends the next packet only after the
-  previous one was acknowledged, or after `session.idle` shows the turn ended.
-  A turn that ended without `watch_ack` leaves the packet visible as
-  unacknowledged; it is not sent again.
+- **Send modes.** `batched` packets use `mode: "enqueue"`, which appends to
+  the session's message queue behind pending work. `immediate` packets use
+  `mode: "immediate"`, which interjects into a turn in progress, so only
+  decision-relevant changes steer running work.
+- **One outstanding message.** The daemon sends the next packet only after
+  the previous one was acknowledged, or after the agent stopped
+  (`onAgentStop`) following its consumption. A turn that ended without
+  `watch_ack` leaves the packet visible as unacknowledged; it is not sent
+  again.
 - **Ambiguous sends.** If `session.send` throws or returns no ID, the packet
-  becomes unconfirmed. The adapter does not retry it. The watch list shows it,
-  and the agent can retrieve it with `watch_pending`.
+  becomes unconfirmed and is not resent blindly. A `user.message` event with
+  the packet ID as `clientTurnId` proves consumption. Its absence proves
+  nothing, because an admitted message appears only once consumed, so the
+  packet stays unconfirmed until consumption appears or the daemon closes it
+  after ten minutes, leaving its events visible in `watch_pending`.
+- **Provenance.** `source: "automation-session-source-watcher"` marks the turn
+  as sent on behalf of an automation the user configured, which starts work
+  but carries no human authority.
 - **Display.** `displayPrompt` shows the user a short line such as
   "Watcher: 2 changes on example/project#42", while the full packet goes to the
   model.
@@ -157,9 +172,10 @@ sequenceDiagram
 
 | Event | Adapter action |
 | --- | --- |
-| `session.start` | Bind and register tools |
-| `session.resume` | Rebind with the same native session ID; the daemon sends any packets that queued while the session was closed |
-| `session.idle` | Report idle; the daemon may send the next packet |
+| `onSessionStart` (startup or new) | Bind, register tools, add watching guidance to the context |
+| `onSessionStart` (resume) | Rebind with the same native session ID; the daemon reconciles open packets and sends any that queued while the session was closed |
+| `user.message` with a packet's `clientTurnId` | Report the packet consumed |
+| `onAgentStop` or `abort` after consumption | Report the packet completed; the daemon may send the next one |
 | `session.shutdown` | Report disconnected; collection continues, packets queue |
 | Session archived in the app | Suspend the session's watches until it is resumed |
 
@@ -187,8 +203,9 @@ The extension registers a canvas that shows the session's watches, who added
 them and why, coverage, pending and unacknowledged messages, and removed
 watches.
 
-- Pause, resume, remove and resolve buttons in the canvas UI call the daemon
-  as **user** actions.
+- The canvas `open` handler serves the page from a local HTTP server and
+  returns its URL. Pause, resume, remove and resolve buttons post to that
+  server, which calls the daemon as **user** actions.
 - Canvas actions that the agent could invoke are read-only, such as returning
   the current list. The agent changes watches only through the watch tools, as
   **agent** actions. This keeps the audit trail honest and keeps a removed
