@@ -19,6 +19,35 @@ picks the work back up with its full history and context. The session decides
 what to do, with the same permissions it already has. You can see, change,
 pause and remove every watch at any time.
 
+## At a glance
+
+```mermaid
+flowchart LR
+    U([You])
+    subgraph H["AI harness: Copilot, OpenChamber, ..."]
+        S[AI session]
+        A["Harness adapter<br/>(pluggable)"]
+        S <-->|"watch tools,<br/>own writes"| A
+    end
+    UI[Watch list UI]
+    W[Watcher service]
+    R[(Issues, PRs, builds,<br/>threads, files)]
+
+    U -->|asks for work| S
+    U -->|view, change, remove| UI
+    A <-->|"adds and clears watches,<br/>acknowledgments"| W
+    UI --> W
+    W -->|"polls or listens<br/>outside the model, no tokens"| R
+    W -->|"on change: packet"| A
+    A -->|"sends a message<br/>into the session"| S
+```
+
+The harness adapter is the only part that knows the AI harness. It gives the
+agent its watch tools, reports the session's own writes, and turns the
+watcher's packets into messages in the right conversation. Supporting another
+harness means writing another adapter; see
+[harness integrations](docs/integrations/README.md).
+
 ## Waiting costs no tokens
 
 Watching happens entirely outside the model. A small local service polls the
@@ -92,32 +121,7 @@ request did.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    U([You])
-    subgraph H["AI harness: Copilot, OpenChamber, ..."]
-        S[AI session]
-        A["Harness adapter<br/>(pluggable)"]
-        S <-->|"watch tools,<br/>own writes"| A
-    end
-    UI[Watch list UI]
-    W[Watcher service]
-    R[(Issues, PRs, builds,<br/>threads, files)]
-
-    U -->|asks for work| S
-    U -->|view, change, remove| UI
-    A <-->|"adds and clears watches,<br/>acknowledgments"| W
-    UI --> W
-    W -->|"polls or listens<br/>outside the model, no tokens"| R
-    W -->|"on change: packet"| A
-    A -->|"sends a message<br/>into the session"| S
-```
-
-The harness adapter is the only part that knows the AI harness. It gives the
-agent its watch tools, reports the session's own writes, and turns the
-watcher's packets into messages in the right conversation. Supporting another
-harness means writing another adapter; see
-[harness integrations](docs/integrations/README.md).
+The steps behind the [overview diagram](#at-a-glance):
 
 1. **Watch.** The agent adds a watch whenever it starts or waits on
    something: a pull request it opened, a build it triggered, a question it
