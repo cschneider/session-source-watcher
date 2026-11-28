@@ -165,7 +165,11 @@ The steps behind the [overview diagram](#at-a-glance):
 - [Harness integrations](docs/integrations/README.md): the pluggable adapter
   contract, with pages for [GitHub Copilot](docs/integrations/copilot.md) and
   [OpenChamber](docs/integrations/openchamber.md).
-- [Prior art](docs/prior-art.md): related public projects and protocols.
+- [Watcher design](docs/design/watcher.md) and
+  [Copilot plugin design](docs/design/copilot-plugin.md): concrete modules,
+  storage, protocol and algorithms for the first release.
+- [Prior art](docs/prior-art.md): how related public projects are built and
+  what this design takes from them.
 
 ## Development
 

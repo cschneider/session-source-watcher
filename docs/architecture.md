@@ -2,7 +2,9 @@
 
 **Status:** Proposed. The repository is a development scaffold, not a working
 watcher service. The conversation-facing contract is described in
-[session interaction](session-interaction.md).
+[session interaction](session-interaction.md). Implementation-level designs
+for the [watcher](design/watcher.md) and the
+[Copilot plugin](design/copilot-plugin.md) refine this document.
 
 ## Purpose
 
@@ -98,9 +100,12 @@ flowchart LR
     SVC -->|HTTPS| Ext[(Providers)]
 ```
 
-IPC uses a user-private Unix domain socket or named pipe, plus a per-client
-token issued at binding. A localhost TCP port, if offered for a browser
-dashboard, requires the same token and an origin check.
+IPC uses a user-private Unix domain socket or named pipe. Clients prove
+possession of a user-private secret in their first frame, and every
+connection declares its role, which determines whether it acts with user or
+agent authority. A localhost TCP port, if offered for a browser dashboard,
+requires a token and an origin check. The
+[watcher design](design/watcher.md#ipc-protocol) specifies the protocol.
 
 ## Components and modules
 
