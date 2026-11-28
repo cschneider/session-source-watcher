@@ -1,6 +1,6 @@
 # Watcher design
 
-**Status:** Proposed implementation design for the first release. It refines
+**Status:** Implemented in the first release. It refines
 the [architecture](../architecture.md) into concrete modules, storage,
 protocols and algorithms. The Copilot adapter is designed in
 [copilot-plugin.md](copilot-plugin.md).
@@ -23,25 +23,24 @@ passes against real pull requests.
 ## Package layout
 
 One TypeScript package, `session-source-watcher`, compiled with `tsc`. The
-Copilot extension is bundled into a single file with esbuild, because Copilot
-loads extensions without installing dependencies.
+Copilot extension and the `ssw` command it starts the daemon with are each
+bundled into a single file with esbuild, because Copilot loads extensions
+without installing dependencies.
 
 ```text
 src/
-├── core/          pure domain logic, no I/O
-│   ├── model.ts       ids, subscription, event, packet types
-│   ├── lifecycle.ts   subscription and event state machines
-│   ├── diff.ts        stream, snapshot and query change detection
-│   ├── coalesce.ts    batching and packet assembly
-│   └── render.ts      deterministic packet text
-├── store/         SQLite schema, migrations, repositories
-├── protocol/      IPC frames and schemas, shared by daemon and adapters
-├── daemon/        process, IPC server, scheduler, delivery, budgets
-├── sources/
-│   └── github/        pull-request source adapter
-├── cli/           `ssw` command
-└── adapters/
-    └── copilot/       Copilot extension entrypoint (bundled separately)
+├── core/              pure domain logic, no I/O
+│   ├── model.ts           states, urgencies, policies
+│   ├── source.ts          source adapter contract
+│   ├── diff.ts            read results to observations
+│   ├── render.ts          sanitized, deterministic packet text
+│   ├── ids.ts, clock.ts   ULIDs and a fake clock for tests
+├── store/             SQLite schema, migrations and transactions
+├── protocol/          paths, handshake, JSON-RPC connection, method schemas, client
+├── daemon/            application layer, collector, delivery, IPC server, retention
+├── sources/github/    GitHub API client and pull-request source
+├── cli/               `ssw` command
+└── adapters/copilot/  Copilot extension: tools, tracker, write extraction, canvas
 ```
 
 Dependency rules: `core` imports nothing outside itself. `sources` import
@@ -50,11 +49,11 @@ Dependency rules: `core` imports nothing outside itself. `sources` import
 | Concern | Choice | Reason |
 | --- | --- | --- |
 | Runtime | Node.js 22.13 or later | Matches `package.json`; `node:sqlite` is available without a flag |
-| Storage | `node:sqlite` (`DatabaseSync`) behind a `Store` interface | No native build step; the interface allows a swap if the module's experimental status becomes a problem |
-| Validation | `zod` schemas in `protocol/` | One schema per frame and tool, used for runtime validation and TypeScript types |
+| Storage | `node:sqlite` (`DatabaseSync`) behind a `Store` wrapper | No native build step; the wrapper allows a swap if the module's experimental status becomes a problem |
+| Validation | `zod` schemas in `protocol/` | One schema per method, used for runtime validation and TypeScript types |
 | IDs | ULIDs | Sortable, unique without coordination |
 | HTTP | Global `fetch` | No dependency; conditional requests and `AbortSignal` support |
-| Tests | `node:test` with a fake clock and a fake GitHub server | No framework dependency |
+| Tests | `node:test` with a fake clock, a scripted source, a fake adapter and a fake GitHub server | No framework dependency |
 
 ## Processes
 
@@ -150,10 +149,11 @@ sequenceDiagram
 | `watch.ack` | adapter | Assess exact event IDs: outcome, optional `deferUntil` and note |
 | `watch.expect` | adapter | Declare writes the session made |
 | `writes.report` | adapter | Mutations observed from tool calls |
-| `packet.deliver` | daemon to adapter | Notification: send this packet into the session |
+| `packet.deliver` | daemon to adapter | Request: send this packet into the session; the reply is the admission result |
 | `packet.progress` | adapter | `admitted` with receipt, `not-admitted`, `unknown`, `consumed`, `completed` |
 | `packet.reconcile` | daemon to adapter | Request: report the packet's current admission, consumption and completion |
-| `escalation.resolve` | cli, ui | Close an escalated event |
+| `escalation.resolve` | cli, ui | Close an escalated or unacknowledged event |
+| `sessions.list` | cli, ui | Sessions known to the daemon |
 | `status` | any | Daemon health, budgets, collector state |
 
 Progress reports are idempotent and monotonic: a report never moves a packet
@@ -162,198 +162,45 @@ nothing.
 
 ## Storage
 
-One SQLite database, `state.db`, in WAL mode with `foreign_keys=ON` and a
-schema version in `meta`. Migrations run at startup inside a transaction.
+One SQLite database, `state.db`, in WAL mode with `foreign_keys=ON`. The
+schema is defined in `src/store/schema.ts`; migrations run at startup in a
+transaction, and `PRAGMA user_version` holds the schema version. A database
+newer than the running watcher is refused.
 
-```sql
-CREATE TABLE bindings (
-  id TEXT PRIMARY KEY,
-  harness TEXT NOT NULL,
-  host_id TEXT NOT NULL,
-  native_session_id TEXT NOT NULL,
-  tier TEXT NOT NULL,                       -- message | next-turn | pull
-  status TEXT NOT NULL,                     -- connected | disconnected | archived | ended
-  busy INTEGER NOT NULL DEFAULT 0,
-  connection_epoch INTEGER NOT NULL DEFAULT 0,
-  last_seen_at INTEGER NOT NULL,
-  revision INTEGER NOT NULL,
-  UNIQUE (harness, host_id, native_session_id)
-);
-
-CREATE TABLE collection_groups (
-  id TEXT PRIMARY KEY,
-  source_type TEXT NOT NULL,
-  source_key TEXT NOT NULL,                 -- canonical locator
-  account TEXT NOT NULL,                    -- provider account used to read
-  state TEXT NOT NULL,                      -- active | final-sweep | completed
-  terminal TEXT,                            -- terminal state, once reached
-  cadence_s INTEGER NOT NULL,
-  next_run_at INTEGER NOT NULL,
-  lease_owner TEXT,
-  lease_until INTEGER,
-  failures INTEGER NOT NULL DEFAULT 0,
-  health TEXT NOT NULL,                     -- fresh | stale | degraded | blocked
-  cache_json TEXT NOT NULL DEFAULT '{}',    -- ETags per endpoint
-  UNIQUE (source_type, source_key, account)
-);
-
-CREATE TABLE subscriptions (
-  id TEXT PRIMARY KEY,
-  binding_id TEXT NOT NULL REFERENCES bindings(id),
-  group_id TEXT NOT NULL REFERENCES collection_groups(id),
-  changes_json TEXT NOT NULL,
-  policy_json TEXT NOT NULL,                -- cadence, urgency, until, filters
-  origin TEXT NOT NULL,                     -- user | agent
-  reason TEXT,
-  state TEXT NOT NULL,                      -- active | paused | suspended | completed | expired | removed
-  generation INTEGER NOT NULL,
-  revision INTEGER NOT NULL,
-  baselined_at INTEGER,
-  expires_at INTEGER,
-  created_at INTEGER NOT NULL
-);
-CREATE UNIQUE INDEX one_live_subscription
-  ON subscriptions (binding_id, group_id) WHERE state <> 'removed';
-
-CREATE TABLE tombstones (
-  binding_id TEXT NOT NULL,
-  group_id TEXT NOT NULL,
-  removed_by TEXT NOT NULL,                 -- user | agent
-  removed_at INTEGER NOT NULL,
-  PRIMARY KEY (binding_id, group_id)
-);
-
-CREATE TABLE checkpoints (                   -- one row per read unit, e.g. "comments.issue"
-  group_id TEXT NOT NULL REFERENCES collection_groups(id),
-  unit TEXT NOT NULL,
-  coverage TEXT NOT NULL,                   -- complete | partial | failed
-  cursor TEXT,                              -- completed watermark for delta reads
-  resume_json TEXT,                         -- pagination state of an unfinished traversal
-  last_full_at INTEGER,                     -- last complete full read
-  complete_through INTEGER,                 -- last complete coverage time
-  gap_from INTEGER,                         -- open gap, if any
-  next_due_at INTEGER NOT NULL,
-  PRIMARY KEY (group_id, unit)
-);
-
-CREATE TABLE items (                         -- latest known state; the durable dedupe basis
-  group_id TEXT NOT NULL REFERENCES collection_groups(id),
-  item_key TEXT NOT NULL,                   -- e.g. comment:123, check:<sha>:<app>:<name>
-  revision INTEGER NOT NULL,                -- increments on every detected change
-  fingerprint TEXT NOT NULL,                -- hash of the normalized projection
-  projection_json TEXT NOT NULL,
-  missing_count INTEGER NOT NULL DEFAULT 0,
-  last_seen_at INTEGER NOT NULL,
-  PRIMARY KEY (group_id, item_key)
-);
-
-CREATE TABLE observations (
-  id TEXT PRIMARY KEY,
-  group_id TEXT NOT NULL REFERENCES collection_groups(id),
-  item_key TEXT NOT NULL,
-  revision INTEGER NOT NULL,                -- the item revision this change produced
-  kind TEXT NOT NULL,                       -- created | updated | removed | transition
-  category TEXT NOT NULL,
-  version TEXT,                             -- provider version, for echo matching
-  actor TEXT,
-  occurred_at INTEGER,
-  observed_at INTEGER NOT NULL,
-  summary_json TEXT NOT NULL,               -- bounded fields used for rendering
-  previous_json TEXT,                       -- changed fields before the change
-  UNIQUE (group_id, item_key, revision)
-);
-
-CREATE TABLE expected_writes (
-  id TEXT PRIMARY KEY,
-  binding_id TEXT NOT NULL REFERENCES bindings(id),
-  group_id TEXT NOT NULL,
-  item_key TEXT NOT NULL,
-  version TEXT,                             -- exact version, SHA or ID when known
-  reported_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
-  consumed_by TEXT                          -- observation that matched it
-);
-
-CREATE TABLE events (
-  id TEXT PRIMARY KEY,
-  subscription_id TEXT NOT NULL REFERENCES subscriptions(id),
-  generation INTEGER NOT NULL,
-  observation_id TEXT NOT NULL REFERENCES observations(id),
-  urgency TEXT NOT NULL,                    -- immediate | batched | passive
-  state TEXT NOT NULL,                      -- pending | suppressed | queued | delivered | deferred
-                                            -- | acknowledged | escalated | unacknowledged | invalidated
-  packet_id TEXT REFERENCES packets(id),
-  defer_until INTEGER,
-  created_at INTEGER NOT NULL,
-  UNIQUE (subscription_id, observation_id)
-);
-CREATE INDEX events_by_state ON events (state, subscription_id);
-
-CREATE TABLE packets (
-  id TEXT PRIMARY KEY,
-  binding_id TEXT NOT NULL REFERENCES bindings(id),
-  state TEXT NOT NULL,                      -- sending | retry | unconfirmed | admitted | consumed | closed
-  close_reason TEXT,                        -- assessed | completed | invalidated | undeliverable | unconfirmed
-  title TEXT NOT NULL,
-  text TEXT NOT NULL,
-  urgency TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at INTEGER,
-  connection_epoch INTEGER,                 -- epoch of the attempt in flight
-  receipt TEXT,
-  created_at INTEGER NOT NULL,
-  admitted_at INTEGER,
-  consumed_at INTEGER,
-  closed_at INTEGER
-);
-CREATE UNIQUE INDEX one_open_packet
-  ON packets (binding_id) WHERE state <> 'closed';
-
-CREATE TABLE assessments (                   -- history; events.state holds the current one
-  id TEXT PRIMARY KEY,
-  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-  packet_id TEXT NOT NULL,
-  outcome TEXT NOT NULL,                    -- handled | dismissed | deferred | escalated | resolved
-  defer_until INTEGER,
-  actor TEXT NOT NULL,                      -- agent:<binding> | user
-  note TEXT,
-  at INTEGER NOT NULL
-);
-
-CREATE TABLE audit (
-  id TEXT PRIMARY KEY,
-  at INTEGER NOT NULL,
-  actor TEXT NOT NULL,                      -- user | agent:<binding> | system
-  action TEXT NOT NULL,
-  subscription_id TEXT,
-  detail_json TEXT NOT NULL
-);
-
-CREATE TABLE budgets (
-  provider TEXT NOT NULL,
-  account TEXT NOT NULL,
-  remaining INTEGER,
-  reset_at INTEGER,
-  PRIMARY KEY (provider, account)
-);
-```
+| Table | Holds |
+| --- | --- |
+| `bindings` | One row per harness session: harness, host, native session ID, tier, status, connection epoch |
+| `collection_groups` | One row per source and account: state (`active`, `final-sweep`, `completed`), terminal state, cadence, lease, health, ETags |
+| `subscriptions` | A session's watch: changes, policy, origin, reason, baseline mode, state, generation, revision, expiry |
+| `tombstones` | Removed watches per session and source, with who removed them |
+| `checkpoints` | One row per read unit: coverage, delta cursor, last full read, open gap, next due time |
+| `items` | Latest known state of every item: unit, revision, fingerprint, projection, summary |
+| `observations` | One row per detected change, with the summary before and after |
+| `expected_writes` | The session's own writes: item, change type, version, expiry, consumption |
+| `events` | A change for one subscription: urgency, state, packet, deferral |
+| `packets` | Messages to sessions: state, close reason, attempts, epoch, receipt, timestamps |
+| `assessments` | History of acknowledgements and resolutions |
+| `audit` | Who added, changed or removed which watch |
+| `budgets` | Provider rate limits per account |
 
 Key invariants enforced by the schema:
 
 - `one_open_packet`: at most one packet per session that is not closed,
   including packets waiting for a retry or a reconciliation answer.
 - `one_live_subscription`: one watch per session and source.
-- `UNIQUE (group_id, item_key, revision)`: each detected change is one
-  observation. Change detection compares against the durable latest state in
-  `items`, so an item that returns to an earlier state, such as a check going
-  from `failure` back to `success`, is a new revision and a new observation.
+- `UNIQUE (group_id, item_key, revision, kind)`: each detected change is one
+  observation; the `existing` kind used for `baseline: "assess"` reuses the
+  item's current revision without colliding with its change history.
+  Change detection compares against the durable latest state in `items`, so
+  an item that returns to an earlier state, such as a check going from
+  `failure` back to `success`, is a new revision and a new observation.
 - `UNIQUE (subscription_id, observation_id)`: a change reaches a subscription
   at most once.
 
 Retention runs hourly and deletes in dependency order:
 
 1. Packets closed more than seven days ago whose events are all
-   `acknowledged`, `suppressed` or `invalidated`, together with those events
+   `acknowledged`, `suppressed`, `superseded` or `invalidated`, together with those events
    and, through the cascade, their assessments. Events that are `escalated`
    or `unacknowledged` keep their packet until a user resolves them or they
    are 30 days old. Events in `pending` or `deferred` state have no packet and
@@ -592,7 +439,8 @@ receive the other's writes.
 
 Superseding state is coalesced before delivery: a check that goes
 `queued -> in_progress -> success` while events are pending becomes a single
-event from the first to the last state; `success -> failure -> success`
+event, because events for intermediate states are marked `superseded` when a
+later event for the same item is pending; `success -> failure -> success`
 stays visible as a flap, because each step is its own observation and the
 packet lists the transitions. Stream items such as comments are never
 coalesced away.

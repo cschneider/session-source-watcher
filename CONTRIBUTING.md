@@ -1,7 +1,7 @@
 # Contributing
 
-The repository contains a proposed architecture and build scaffold. Discuss
-behavior and harness contracts before adding a service or integration.
+The repository contains the first release of the watcher and its design.
+Discuss behavior and harness contracts before adding a source or integration.
 
 ## Development
 
@@ -10,10 +10,13 @@ Use Node.js 22.13 or later.
 ```sh
 npm ci
 npm run typecheck
+npm test
+npm run test:e2e
 npm run build
 ```
 
-Add focused tests when implementing behavior. Keep the core independent of
+Install from the public npm registry so `package-lock.json` references only
+public URLs. Add focused tests when implementing behavior. Keep the core independent of
 harness SDKs and validate external data at runtime.
 
 ## Changes

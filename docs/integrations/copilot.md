@@ -1,10 +1,11 @@
 # GitHub Copilot integration
 
-**Status:** Proposed. This page describes the planned adapter for GitHub
-Copilot (Copilot CLI and the GitHub Copilot app). It is built only on the
-public Copilot extension SDK (`@github/copilot-sdk/extension`). Verify the
-current SDK reference before implementation; the code below is a sketch. The
-implementation-level design is [Copilot plugin design](../design/copilot-plugin.md).
+**Status:** Implemented in `src/adapters/copilot`. This page describes the
+adapter for GitHub Copilot (Copilot CLI and the GitHub Copilot app). It is
+built only on the public Copilot extension SDK (`@github/copilot-sdk/extension`);
+the code below is a condensed sketch of it. The implementation-level design,
+installation and verification results are in the
+[Copilot plugin design](../design/copilot-plugin.md).
 
 Copilot reaches the **message** tier: when the watcher observes a change, the
 adapter sends a message into the exact conversation that owns the watch, and

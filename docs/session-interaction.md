@@ -1,7 +1,8 @@
 # Session interaction
 
-**Status:** Proposed. Tool names, fields and formats are design targets, not an
-implemented interface.
+**Status:** Implemented in the first release for GitHub pull requests and
+GitHub Copilot. Delivery tiers other than the message tier are designed but
+not yet built.
 
 This document describes how a conversation, its user and the watcher work
 together. The [architecture](architecture.md) describes how the service

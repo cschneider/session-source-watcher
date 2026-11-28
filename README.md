@@ -67,9 +67,9 @@ model tokens.
 The model wakes up only when the watcher sends it a message worth reading, and
 that message is already reduced to the changes that matter.
 
-**Status:** Proposed. This repository contains the architecture and a
-TypeScript build scaffold. No watcher service, source adapters, MCP server or
-harness integrations are implemented yet.
+**Status:** First release. The daemon, GitHub pull-request watching, the `ssw`
+command line and the GitHub Copilot extension are implemented. Other sources,
+the MCP server and further harness adapters are designed but not built yet.
 
 ## What it feels like
 
@@ -171,19 +171,45 @@ The steps behind the [overview diagram](#at-a-glance):
 - [Prior art](docs/prior-art.md): how related public projects are built and
   what this design takes from them.
 
-## Development
+## Try it with GitHub Copilot
 
-Use Node.js 22.13 or later and npm.
+Requirements: Node.js 22.13 or later on `PATH`, and the GitHub CLI signed in
+(`gh auth login`), whose credentials the watcher uses to read pull requests.
+
+```sh
+npm ci
+npm run install:copilot      # builds and copies the extension to ~/.copilot/extensions
+```
+
+Copilot extensions are experimental: start the CLI with `copilot --experimental`
+or turn experimental features on with `/settings experimental on`. In a new
+session, ask the agent to open or watch a pull request. The extension starts
+the watcher daemon on demand; `ssw` manages it from a terminal:
+
+```sh
+npx ssw doctor                     # credentials, socket, daemon and collectors
+npx ssw sessions                   # sessions the daemon knows
+npx ssw list --session <id>        # a session's watches, with origin and coverage
+npx ssw pending --session <id>     # pending, unconfirmed and escalated changes
+npx ssw remove <watch> --session <id>
+npx ssw service install            # run the daemon at login instead of on demand
+```
+
+Changes made with `ssw` act with your authority and ask for confirmation on a
+terminal; a watch you remove cannot be re-added by the agent.
+
+## Development
 
 ```sh
 npm ci
 npm run typecheck
+npm test               # unit and daemon integration tests
+npm run test:e2e       # packaged Copilot extension against a stub SDK
 npm run build
 ```
 
-The empty `src/index.ts` establishes the build entrypoint. JavaScript,
-declarations and source maps are emitted to `dist/`. There is no runnable
-service or test suite yet. npm package publication is disabled.
+`npm run package:copilot` builds the plugin into `dist/copilot-plugin/`. npm
+package publication is disabled.
 
 ## Contributing
 

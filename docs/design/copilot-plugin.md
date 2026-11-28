@@ -1,6 +1,6 @@
 # Copilot plugin design
 
-**Status:** Proposed implementation design for the first release. It refines
+**Status:** Implemented in the first release and verified in a live Copilot CLI session. It refines
 the [Copilot integration](../integrations/copilot.md) into a concrete
 extension, built against the Copilot extension SDK type definitions and
 documentation that ship with the Copilot CLI. The daemon side is designed in
@@ -27,23 +27,35 @@ collection.
 ## Packaging
 
 ```text
-session-source-watcher/                 # Copilot plugin
+dist/copilot-plugin/                    # built by npm run package:copilot
 ├── plugin.json
 └── com.github.copilot/
     └── extensions/
         └── session-source-watcher/
             ├── extension.mjs           # esbuild bundle of src/adapters/copilot
-            └── ui/                     # watch list page and assets
+            └── ssw.mjs                 # bundled command line; starts the daemon
 ```
 
 - `extension.mjs` is a single ES module with all dependencies bundled. The SDK
-  module is imported by name and resolved by the CLI; it is marked external in
-  the bundle.
+  module, `@github/copilot-sdk/extension`, is resolved by the CLI and marked
+  external in the bundle; the CLI resolves `@microsoft/copilot-sdk/extension`
+  to the same module.
+- `npm run install:copilot` copies the extension directory to
+  `~/.copilot/extensions/session-source-watcher/` (or under `COPILOT_HOME`).
+  During development the same directory can live in
+  `.github/extensions/session-source-watcher/` of a repository.
+- Copilot extensions are experimental: they load only when the CLI runs with
+  `--experimental` or experimental features are turned on. In prompt mode
+  (`copilot -p`), project extensions also need
+  `GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS=true` and an approved launch.
 - The extension starts eagerly. It has no `extension.json` for request-driven
   activation, because event observers, hooks and background delivery must run
   without a tool call first.
-- During development the same file can live in
-  `.github/extensions/session-source-watcher/` of a repository.
+- The extension starts the daemon with `node ssw.mjs daemon`. It uses its own
+  `process.execPath` only when that is a `node` binary, because extensions can
+  run under a runtime that is not; `SSW_DAEMON_COMMAND` overrides the command.
+  The daemon's standard error goes to `daemon.stderr.log` in the state
+  directory.
 - The plugin does not request sensitive environment variables. The daemon,
   not the extension, reads provider credentials.
 
@@ -272,19 +284,20 @@ messages, and removed watches.
 
 ## Verification checklist
 
-Before the adapter is declared message tier:
+Results from a live Copilot CLI session (version 1.0.117) with the packaged
+extension, the bundled daemon and a scripted GitHub API:
 
-- `send` with `source: "automation-…"` starts a turn in idle sessions and is
-  queued or taken as steering in busy ones, in the Copilot CLI and the Copilot
-  app.
-- `clientTurnId` is present on the consuming `user.message` event in
-  `getEvents()`, including after a CLI restart and for queued and steering
-  messages.
-- `onAgentStop` fires once after the work that consumed a packet, also in
-  Autopilot sessions, and the message queue is empty when it fires.
-- `immediate` and `enqueue` ordering with competing user messages.
-- `onPostToolUse` payloads for the shell tool and GitHub MCP tools contain
-  the arguments, URLs and SHAs used for echo suppression.
-- Extension reload, CLI restart and session resume produce neither duplicate
-  nor lost packets.
-- Starting the daemon from an extension process works under Protected Mode.
+| Check | Result |
+| --- | --- |
+| Extension loads, registers its tools, hooks and canvas | Verified |
+| The daemon starts on demand from the extension and the session binds | Verified |
+| `watch_add` and `watch_list` through the real tool runtime | Verified |
+| A change detected while the agent is in a turn reaches that session as a watcher message | Verified: an `immediate` packet was delivered as steering into the running turn |
+| The `user.message` event carries `source: automation-session-source-watcher` and the packet ID as `clientTurnId` | Verified in the persisted session history |
+| Consumption is detected from the echoed `clientTurnId`; the agent's `watch_ack` closes the packet | Verified |
+| `send` into an idle session starts a turn, in the CLI and the Copilot app | Open |
+| `clientTurnId` after a CLI restart, and for enqueued messages | Open |
+| `onAgentStop` fires once after the work that consumed a packet, including Autopilot | Open |
+| `onPostToolUse` payloads for the shell tool and GitHub MCP tools | Open; extraction is unit-tested against the documented shapes |
+| Extension reload, CLI restart and session resume without duplicate or lost packets | Open; covered by daemon integration tests with a fake adapter |
+| Starting the daemon from an extension process under Protected Mode | Open |

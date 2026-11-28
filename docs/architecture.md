@@ -1,10 +1,10 @@
 # Session source watcher architecture
 
-**Status:** Proposed. The repository is a development scaffold, not a working
-watcher service. The conversation-facing contract is described in
-[session interaction](session-interaction.md). Implementation-level designs
-for the [watcher](design/watcher.md) and the
-[Copilot plugin](design/copilot-plugin.md) refine this document.
+**Status:** The first release implements the core, the daemon, the GitHub
+pull-request source and the Copilot adapter as designed in
+[watcher.md](design/watcher.md) and [copilot-plugin.md](design/copilot-plugin.md);
+the rest of this document is the target architecture. The conversation-facing
+contract is described in [session interaction](session-interaction.md).
 
 ## Purpose
 
