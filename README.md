@@ -19,78 +19,7 @@ picks the work back up with its full history and context. The session decides
 what to do, with the same permissions it already has. You can see, change,
 pause and remove every watch at any time.
 
-## Waiting costs no tokens
-
-Watching happens entirely outside the model. A small local service polls the
-resources with cheap conditional requests, or listens for events where a
-provider or the file system offers them. Checking a pull request a hundred
-times while nobody touches it costs a hundred tiny HTTP requests and zero
-model tokens.
-
-| | Agent polls by itself | Session source watcher |
-| --- | --- | --- |
-| Who checks | The model, in a turn | A local service, outside the model |
-| Cost per unchanged check | A model turn: prompt, context and tool output tokens | One conditional request, no tokens |
-| Cost while nothing happens for hours | Grows with every check | Zero tokens |
-| When tokens are spent | Every check | Only when the watcher sends the session a message |
-| What the model reads | Full tool output each time | A compact summary of what changed |
-
-The model wakes up only when the watcher sends it a message worth reading, and
-that message is already reduced to the changes that matter.
-
-**Status:** Proposed. This repository contains the architecture and a
-TypeScript build scaffold. No watcher service, source adapters, MCP server or
-harness integrations are implemented yet.
-
-## What it feels like
-
-```text
-You    Open a PR for the fix and address review feedback.
-
-Agent  Opened example/project#42. I'm watching its reviews and checks until
-       it merges.                                     [watch w-7 added by agent]
-
-       ... two hours pass: the watcher checks every few minutes outside the
-           model; zero tokens are spent ...
-
-Watcher (message to the session)
-       w-7 · example/project#42 · 2 changes · coverage complete
-       1. Review: changes requested by @reviewer on src/cache.ts:88
-          "The cache key ignores the locale."
-       2. Check unit-tests: passed -> failed
-
-Agent  The reviewer is right, and the failing test is the same bug: the key
-       omits the locale. Pushed a fix with a regression test and replied in
-       the review thread. Still watching.                   [acknowledged]
-
-       ... the agent's own reply and push are recognised and not echoed back ...
-
-Watcher (message to the session)
-       w-7 · example/project#42 merged by @maintainer.
-
-Agent  Merged. Nothing left to follow, so I stopped watching it.
-                                                       [watch w-7 completed]
-```
-
-Nobody asked for a watch: the agent added one because it was now waiting on a
-review, and cleared it when the pull request merged. When the review came in,
-the watcher sent a message straight into the session that opened the pull
-request, with its history and context. The model ran only when there was
-something to react to. The watcher did not decide to push code; the user's
-request did.
-
-## What you can watch
-
-| Resource | Typical changes | Useful for |
-| --- | --- | --- |
-| Pull request | reviews, comments, checks, state | Following a change through review and merge |
-| Build or deployment run | stage results, final status | Waiting for a long pipeline without polling |
-| Issue | comments, labels, state | Waiting for a reporter's answer |
-| Chat thread | new replies | A question asked to a colleague |
-| Local file or log | appended lines, content changes | A long-running local job |
-| Saved query | new matching items | Triage of newly filed issues, without auto-subscribing to each |
-
-## How it works
+## At a glance
 
 ```mermaid
 flowchart LR
@@ -118,6 +47,71 @@ agent its watch tools, reports the session's own writes, and turns the
 watcher's packets into messages in the right conversation. Supporting another
 harness means writing another adapter; see
 [harness integrations](docs/integrations/README.md).
+
+## Waiting costs no tokens
+
+Watching happens entirely outside the model. A small local service polls the
+resources with cheap conditional requests, or listens for events where a
+provider or the file system offers them. Checking a pull request a hundred
+times while nobody touches it costs a hundred tiny HTTP requests and zero
+model tokens.
+
+| | Agent polls by itself | Session source watcher |
+| --- | --- | --- |
+| Who checks | The model, in a turn | A local service, outside the model |
+| Cost per unchanged check | A model turn: prompt, context and tool output tokens | One conditional request, no tokens |
+| Cost while nothing happens for hours | Grows with every check | Zero tokens |
+| When tokens are spent | Every check | Only when the watcher sends the session a message |
+| What the model reads | Full tool output each time | A compact summary of what changed |
+
+The model wakes up only when the watcher sends it a message worth reading, and
+that message is already reduced to the changes that matter.
+
+**Status:** Proposed. This repository contains the architecture and a
+TypeScript build scaffold. No watcher service, source adapters, MCP server or
+harness integrations are implemented yet.
+
+## What it feels like
+
+> **You:** Fix the login bug, open a pull request and take care of the review
+> feedback.
+>
+> **Agent:** Done, the pull request is open. I'll keep an eye on it and pick
+> it up again when the reviewers respond.
+
+*Two hours pass. Nothing runs in the conversation, and no tokens are spent.*
+
+> **Watcher:** News on your pull request: Sam asked for a change, and one test
+> now fails.
+>
+> **Agent:** Sam is right, and the failing test is caused by the same problem.
+> I fixed it, added a test and replied to Sam. Still watching.
+
+*The next morning.*
+
+> **Watcher:** The pull request was merged.
+>
+> **Agent:** Merged. Nothing left to wait for, so I stopped watching it.
+
+You never asked the agent to watch anything. It started watching because it
+was waiting for a review, and stopped when the work was done. The news arrived
+in the same conversation, so the agent knew exactly what it was working on.
+And the decision to fix the code came from your request, not from the watcher.
+
+## What you can watch
+
+| Resource | Typical changes | Useful for |
+| --- | --- | --- |
+| Pull request | reviews, comments, checks, state | Following a change through review and merge |
+| Build or deployment run | stage results, final status | Waiting for a long pipeline without polling |
+| Issue | comments, labels, state | Waiting for a reporter's answer |
+| Chat thread | new replies | A question asked to a colleague |
+| Local file or log | appended lines, content changes | A long-running local job |
+| Saved query | new matching items | Triage of newly filed issues, without auto-subscribing to each |
+
+## How it works
+
+The steps behind the [overview diagram](#at-a-glance):
 
 1. **Watch.** The agent adds a watch whenever it starts or waits on
    something: a pull request it opened, a build it triggered, a question it
