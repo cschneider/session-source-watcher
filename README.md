@@ -94,13 +94,30 @@ request did.
 
 ```mermaid
 flowchart LR
-    U([You]) -->|asks for work| S[AI session]
-    U -->|view, change, remove| UI[Watch list UI]
-    S -->|adds and clears watches,<br/>acknowledges updates| W[Watcher service]
+    U([You])
+    subgraph H["AI harness: Copilot, OpenChamber, ..."]
+        S[AI session]
+        A["Harness adapter<br/>(pluggable)"]
+        S <-->|"watch tools,<br/>own writes"| A
+    end
+    UI[Watch list UI]
+    W[Watcher service]
+    R[(Issues, PRs, builds,<br/>threads, files)]
+
+    U -->|asks for work| S
+    U -->|view, change, remove| UI
+    A <-->|"adds and clears watches,<br/>acknowledgments"| W
     UI --> W
-    W -->|"polls or listens<br/>outside the model, no tokens"| R[(Issues, PRs, builds,<br/>threads, files)]
-    W -->|"on change: sends a message<br/>into the session"| S
+    W -->|"polls or listens<br/>outside the model, no tokens"| R
+    W -->|"on change: packet"| A
+    A -->|"sends a message<br/>into the session"| S
 ```
+
+The harness adapter is the only part that knows the AI harness. It gives the
+agent its watch tools, reports the session's own writes, and turns the
+watcher's packets into messages in the right conversation. Supporting another
+harness means writing another adapter; see
+[harness integrations](docs/integrations/README.md).
 
 1. **Watch.** The agent adds a watch whenever it starts or waits on
    something: a pull request it opened, a build it triggered, a question it
