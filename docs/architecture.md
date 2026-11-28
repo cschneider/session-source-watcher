@@ -472,6 +472,11 @@ The portable MCP server supplies subscription management, `watch_pending` and
 `watch_ack`. MCP resource notifications do not by themselves guarantee model
 wakeups, persisted subscriptions or exact-session delivery.
 
+Adapters are pluggable and packaged per harness; see
+[harness integrations](integrations/README.md) for the adapter contract and
+the [Copilot](integrations/copilot.md) and
+[OpenChamber](integrations/openchamber.md) adapters.
+
 An integration spike verifies a harness's publicly supported execution and
 delivery contracts before implementation depends on them. Experimental APIs are
 capability-gated and labelled; private APIs are not a portability contract.

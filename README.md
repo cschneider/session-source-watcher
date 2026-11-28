@@ -151,6 +151,9 @@ flowchart LR
   contract, tools, update format and acknowledgments.
 - [Architecture](docs/architecture.md): components, data model, change
   detection, delivery guarantees and security.
+- [Harness integrations](docs/integrations/README.md): the pluggable adapter
+  contract, with pages for [GitHub Copilot](docs/integrations/copilot.md) and
+  [OpenChamber](docs/integrations/openchamber.md).
 - [Prior art](docs/prior-art.md): related public projects and protocols.
 
 ## Development
