@@ -56,9 +56,11 @@ sequenceDiagram
     U->>S: Open a PR, address review feedback
     S->>G: Create pull request #42
     Note over S: Now waiting on a review, so the agent adds a watch
-    S->>W: watch_add(PR #42, reviews+checks+state, until merged, 7d)
+    S->>H: watch_add(PR #42, reviews+checks+state, until merged, 7d)
+    H->>W: Add watch for this session
     W->>G: Baseline read
-    W-->>S: Watching w-7, revision 1
+    W-->>H: Watching w-7, revision 1
+    H-->>S: Watching w-7
     S-->>U: Opened #42, watching reviews and checks
 
     loop Every few minutes
@@ -72,7 +74,8 @@ sequenceDiagram
     H->>S: Message starts a turn in this session
     S->>G: Push fix, reply in review thread
     H->>W: Report session writes (commit, reply)
-    S->>W: watch_ack(pk-1, handled)
+    S->>H: watch_ack(pk-1, handled)
+    H->>W: Acknowledge ev-301, ev-302
 
     W->>G: Conditional read
     G-->>W: New commit and reply
@@ -81,15 +84,17 @@ sequenceDiagram
     G-->>W: Pull request merged
     W->>H: Send message pk-2 (final)
     H->>S: Message starts a turn in this session
-    S->>W: watch_ack(pk-2, handled)
+    S->>H: watch_ack(pk-2, handled)
+    H->>W: Acknowledge
     Note over W: Completion condition met, w-7 completed
     S-->>U: Merged, stopped watching
 ```
 
 ## Tools
 
-The same application layer serves the agent's tools, the user interface and
-the portable MCP server. Every write carries the expected revision; a stale
+The harness adapter registers these tools in the session and forwards them to
+the watcher. The same application layer serves the agent's tools, the user
+interface and the portable MCP server. Every write carries the expected revision; a stale
 write returns the current state instead of overwriting a concurrent change.
 
 | Tool | Purpose |

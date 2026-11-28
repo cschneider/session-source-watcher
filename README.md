@@ -16,8 +16,8 @@ those resources outside the model, by polling them or listening for events,
 and the moment it observes a meaningful change, it sends the owning session a
 message. The message arrives in the conversation like a new turn, and the agent
 picks the work back up with its full history and context. The session decides
-what to do, with the same permissions it already has. You can see,
-change, pause and remove every watch at any time.
+what to do, with the same permissions it already has. You can see, change,
+pause and remove every watch at any time.
 
 ## Waiting costs no tokens
 
@@ -75,8 +75,8 @@ Agent  Merged. Nothing left to follow, so I stopped watching it.
 Nobody asked for a watch: the agent added one because it was now waiting on a
 review, and cleared it when the pull request merged. When the review came in,
 the watcher sent a message straight into the session that opened the pull
-request, with its history and context. The
-model ran only when there was something to react to. The watcher did not decide to push code; the user's
+request, with its history and context. The model ran only when there was
+something to react to. The watcher did not decide to push code; the user's
 request did.
 
 ## What you can watch
@@ -165,7 +165,7 @@ harness means writing another adapter; see
 ## Learn more
 
 - [Session interaction](docs/session-interaction.md): the conversation
-  contract, tools, update format and acknowledgments.
+  contract, tools, change messages and acknowledgments.
 - [Architecture](docs/architecture.md): components, data model, change
   detection, delivery guarantees and security.
 - [Harness integrations](docs/integrations/README.md): the pluggable adapter

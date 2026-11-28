@@ -9,11 +9,13 @@ watcher service. The conversation-facing contract is described in
 Keep an AI conversation informed about the resources its work is waiting on,
 while spending model tokens only when something meaningful changes. Polling,
 event listening, change detection and summarization run in the watcher,
-outside the model; unchanged checks never start a model turn. The agent registers and clears
-subscriptions on its own as part of its work; the user sees all of them and can
-change them. Each session owns its subscriptions. A shared local service collects
-evidence, detects changes and queues delivery. The session interprets changes
-under its existing permissions.
+outside the model; unchanged checks never start a model turn.
+
+The agent registers and clears subscriptions on its own as part of its work;
+the user sees all of them and can change them. Each session owns its
+subscriptions. A shared local service collects evidence, detects changes and
+sends the owning session a message through its harness adapter. The session
+interprets changes under its existing permissions.
 
 ### Non-goals
 
