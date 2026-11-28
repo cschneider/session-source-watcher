@@ -1,6 +1,7 @@
 # Agent guidance
 
-Read [docs/architecture.md](docs/architecture.md) and
+Read [docs/architecture.md](docs/architecture.md),
+[docs/session-interaction.md](docs/session-interaction.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md). Proposed behavior is not implemented behavior.
 
 - Keep harness-specific integrations outside the core.
