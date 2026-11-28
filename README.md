@@ -205,12 +205,10 @@ npm ci
 npm run typecheck
 npm test               # unit and daemon integration tests
 npm run test:e2e       # packaged Copilot extension against a stub SDK
-npm run test:live      # real Copilot sessions; costs AI credits, see CONTRIBUTING
-npm run build
 ```
 
-`npm run package:copilot` builds the plugin into `dist/copilot-plugin/`. npm
-package publication is disabled.
+[CONTRIBUTING](CONTRIBUTING.md#development) describes the builds, the test
+layers, the live Copilot checks and the development overrides.
 
 ## Contributing
 

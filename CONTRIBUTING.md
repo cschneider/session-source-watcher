@@ -5,19 +5,65 @@ Discuss behavior and harness contracts before adding a source or integration.
 
 ## Development
 
-Use Node.js 22.13 or later.
+Use Node.js 22.13 or later. The daemon stores its state with the built-in
+`node:sqlite` module, which prints an experimental warning; the npm scripts
+silence it.
 
 ```sh
 npm ci
 npm run typecheck
 npm test
 npm run test:e2e
-npm run build
 ```
 
 Install from the public npm registry so `package-lock.json` references only
 public URLs. Add focused tests when implementing behavior. Keep the core independent of
 harness SDKs and validate external data at runtime.
+
+### Builds
+
+| Command | Output | Used by |
+| --- | --- | --- |
+| `npm run build` | `dist/`: `tsc` output of `src/`, one module per file | The `ssw` command (`npx ssw` in a checkout) |
+| `npm run package:copilot` | `dist/copilot-plugin/`: `extension.mjs` and `ssw.mjs`, each one esbuild bundle without `node_modules` | The Copilot extension, `install:copilot`, `test:e2e`, `test:live` |
+| `npm run install:copilot` | The bundle copied to `~/.copilot/extensions/session-source-watcher/` | Local use with the Copilot CLI |
+
+The extension bundle leaves `@github/copilot-sdk/extension` external, because
+Copilot provides the SDK to its extensions. `ssw.mjs` holds the command line
+and the daemon; the extension starts it with `node ssw.mjs daemon`. npm
+package publication is disabled.
+
+### Tests
+
+| Command | Scope | Cost |
+| --- | --- | --- |
+| `npm run typecheck` | Source and tests, without output | Seconds |
+| `npm test` | `test/*.test.ts`: core logic, the GitHub source against a fake HTTP API, the daemon over its real socket with a fake clock, source and adapter (`test/helpers.ts`), and the Copilot adapter's tracker and write extraction | Seconds |
+| `npm run test:e2e` | The packaged extension and bundled daemon against a stub SDK and a fake GitHub API (`test/e2e/`) | Seconds |
+| `npm run test:live` | The packaged extension in real Copilot sessions (`test/live/`, see below) | About 20 minutes and AI credits |
+
+`npm test` compiles into `.test-build/` and runs Node's test runner. To run
+selected tests:
+
+```sh
+npx tsc -p tsconfig.test.json
+node --disable-warning=ExperimentalWarning --test --test-name-pattern="PacketTracker" ".test-build/test/**/*.test.js"
+```
+
+There is no CI. Before opening a pull request, run `npm run typecheck`,
+`npm test` and, for changes to the Copilot adapter, packaging or delivery,
+`npm run test:e2e`. Run `npm run test:live` when a change depends on Copilot
+runtime behavior, such as message delivery, hooks or session events.
+
+### Development overrides
+
+| Variable | Effect |
+| --- | --- |
+| `SSW_STATE_DIR` | State, socket and logs in this directory instead of the per-user default; isolates a test daemon |
+| `SSW_GITHUB_TOKEN` | Token for GitHub reads instead of `gh auth token` |
+| `SSW_GITHUB_API_BASE` | GitHub API base URL, for a fake API |
+| `SSW_DAEMON_COMMAND` | Command the extension runs to start the daemon, as a JSON array or a space-separated string |
+| `SSW_DEBUG_LOG` | File for a JSON Lines trace of the extension's hooks, sends and reports; it records tool arguments, so keep it off in normal use |
 
 ## Live Copilot checks
 
