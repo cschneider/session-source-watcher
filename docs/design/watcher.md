@@ -151,7 +151,7 @@ sequenceDiagram
 | `writes.report` | adapter | Mutations observed from tool calls |
 | `packet.deliver` | daemon to adapter | Request: send this packet into the session; the reply is the admission result |
 | `packet.progress` | adapter | `admitted` with receipt, `not-admitted`, `unknown`, `consumed`, `completed` |
-| `packet.reconcile` | daemon to adapter | Request: report the packet's current admission, consumption and completion |
+| `packet.reconcile` | daemon to adapter | Request, with the packet's send time: report its current admission, consumption and completion |
 | `escalation.resolve` | cli, ui | Close an escalated or unacknowledged event |
 | `sessions.list` | cli, ui | Sessions known to the daemon |
 | `status` | any | Daemon health, budgets, collector state |
@@ -493,7 +493,10 @@ stateDiagram-v2
   answer. After the adapter reconnects, or after 60 seconds, the daemon sends
   `packet.reconcile`; the adapter answers with what the harness can prove
   (see each adapter's design). Only a proof that the message was not admitted
-  moves the packet to `retry`; anything else leaves it `unconfirmed`. A packet
+  moves the packet to `retry`, with its events queued again; anything else
+  leaves it `unconfirmed`. An admission recorded by an earlier connection is
+  no proof for the current one, so a packet admitted before the adapter
+  reconnected can still be moved to `unconfirmed` or `retry`. A packet
   still unconfirmed after ten minutes closes as `unconfirmed`, so the session
   is not blocked: its events become `unacknowledged`, stay visible in the UI
   and `watch.pending`, and are never sent again automatically. A user can

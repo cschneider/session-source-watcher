@@ -15,11 +15,11 @@ collection.
 | --- | --- |
 | Join the session | `joinSession()` attaches the extension process to the session it was started for |
 | Bind to the daemon | `session.bind` with `session.sessionId` |
-| Watch tools | `joinSession({ tools: { definitions } })`, forwarded to the daemon |
+| Watch tools | `joinSession({ tools })`, forwarded to the daemon; the list also carries `definitions` for SDKs that expect that shape |
 | Teach the agent when to watch | `onSessionStart` returns `additionalContext` |
 | Send change messages | `session.send` with an automation source and the packet ID as `clientTurnId` |
 | Detect consumption | `user.message` events echo `clientTurnId` when the message is consumed |
-| Detect completion | `onAgentStop` hook, or an `abort` event, after consumption |
+| Detect completion | `session.idle`, or an `abort` of the top-level agent, after consumption |
 | Reconcile after failures and restarts | `session.getEvents()`, matching `user.message` events by `clientTurnId` |
 | Report own writes | `onPostToolUse`, for recognized mutating commands |
 | Watch list for the user | A canvas whose page is served by the extension |
@@ -160,7 +160,7 @@ sequenceDiagram
     S->>M: The agent works on the change
     M->>X: watch_ack(pk-1, events, handled)
     X->>D: watch.ack
-    S-->>X: onAgentStop
+    S-->>X: session.idle
     X->>D: packet.progress(pk-1, completed)
 ```
 
@@ -190,12 +190,15 @@ const messageId = await session.send({
   event when it consumes the message, whether it started a turn, drained
   from the queue or was taken as steering. The extension reports `consumed`
   on that event.
-- **Completion.** A stop is an `onAgentStop` call (the top-level agent
-  reached a natural stop) or an `abort` of the top-level agent; aborts of
-  sub-agents do not count. A stop reports `completed` for every packet
-  consumed before it and not yet completed, so a packet that steered a
-  running turn completes with that turn. A plain `session.idle` is not used,
-  because it does not identify the work and can occur between continuations.
+- **Completion.** The session going idle (`session.idle`), or an `abort` of
+  the top-level agent, reports `completed` for every packet consumed before
+  it and not yet completed; aborts of sub-agents do not count. A packet that
+  steered a running turn therefore completes with that turn. `onAgentStop`
+  is not used: it fires after every agent interaction, including each
+  Autopilot continuation, while `session.idle` fires once, when the runtime
+  has nothing left to do. Autopilot continuations repeat the packet's
+  `clientTurnId` on a `user.message` with source `autopilot`; they are not a
+  new consumption.
 - **Completion is a release, not an assessment.** Another hook can block a
   stop and keep the agent working, so `completed` may arrive early. That only
   frees the session for the next packet: `watch_ack` is still accepted for
@@ -211,17 +214,23 @@ reads `session.getEvents()`:
 | Finding | Report |
 | --- | --- |
 | A `user.message` with `clientTurnId` equal to the packet ID | `consumed` |
-| Consumed, and a stop was observed after it, or the extension process was restarted since | `completed`; the turn that consumed it is over, possibly interrupted |
+| Consumed, and the session went idle after it, or the extension process was restarted since | `completed`; the turn that consumed it is over, possibly interrupted |
 | Not consumed, the send returned a message ID | `admitted`; consumption is still expected |
-| Not consumed, the send failed | `unknown` |
+| Not consumed, sent by an earlier extension process, and the history has a `session.resume` after the send | `not-admitted`; the runtime's pending queue did not survive the restart |
+| Not consumed, otherwise | `unknown` |
 
-The Copilot adapter never reports `not-admitted` after a failed send: the
-SDK offers no way to inspect the pending message queue or to fence a send
-that may still be in flight, and an admitted message appears in the event
-history only once it is consumed. An unknown packet therefore stays
-unconfirmed until its consumption appears or the daemon closes it as
-`unconfirmed` after ten minutes. The `clientTurnId` is persisted with the
-event, so consumption is found after the extension or the CLI restarted.
+The daemon passes the packet's send time with the request. The pending
+message queue belongs to the runtime process and is not persisted: when the
+runtime stops, queued messages are dropped without a `user.message`. A
+`session.resume` after the send therefore proves that an unconsumed message
+was lost, and the packet is sent again on the new connection. Without that
+proof the adapter never reports `not-admitted`: the SDK offers no way to
+inspect the pending queue or to fence a send that may still be in flight,
+and an admitted message appears in the event history only once it is
+consumed. An unknown packet stays unconfirmed until its consumption appears
+or the daemon closes it as `unconfirmed` after ten minutes. The
+`clientTurnId` is persisted with the event, so consumption is found after
+the extension or the CLI restarted.
 
 ## Reporting own writes
 
@@ -284,8 +293,10 @@ messages, and removed watches.
 
 ## Verification checklist
 
-Results from a live Copilot CLI session (version 1.0.117) with the packaged
-extension, the bundled daemon and a scripted GitHub API:
+`npm run test:live` runs the automatable checks in a real Copilot session
+(CLI 1.0.118) driven through the Copilot SDK, with the packaged extension,
+the bundled daemon, a scripted GitHub API and a fake `gh`. See
+[CONTRIBUTING](../../CONTRIBUTING.md#live-copilot-checks).
 
 | Check | Result |
 | --- | --- |
@@ -295,9 +306,11 @@ extension, the bundled daemon and a scripted GitHub API:
 | A change detected while the agent is in a turn reaches that session as a watcher message | Verified: an `immediate` packet was delivered as steering into the running turn |
 | The `user.message` event carries `source: automation-session-source-watcher` and the packet ID as `clientTurnId` | Verified in the persisted session history |
 | Consumption is detected from the echoed `clientTurnId`; the agent's `watch_ack` closes the packet | Verified |
-| `send` into an idle session starts a turn, in the CLI and the Copilot app | Open |
-| `clientTurnId` after a CLI restart, and for enqueued messages | Open |
-| `onAgentStop` fires once after the work that consumed a packet, including Autopilot | Open |
-| `onPostToolUse` payloads for the shell tool and GitHub MCP tools | Open; extraction is unit-tested against the documented shapes |
-| Extension reload, CLI restart and session resume without duplicate or lost packets | Open; covered by daemon integration tests with a fake adapter |
-| Starting the daemon from an extension process under Protected Mode | Open |
+| `send` into an idle session starts a turn | Verified in the CLI (`test:live`, scenario `idle`) |
+| `clientTurnId` for enqueued messages and after a restart | Verified (`idle`, `restart`) |
+| Completion once per packet, after the last Autopilot continuation | Verified (`autopilot`): `onAgentStop` fires per interaction, `session.idle` once |
+| `onPostToolUse` payload for the shell tool; the agent's own `gh pr comment` is suppressed | Verified (`writes`) |
+| Runtime killed while a packet is queued, then the session resumed | Verified (`restart`): the queued message was lost with the runtime, sent again once and delivered exactly once |
+| `onPostToolUse` payloads for GitHub MCP tools | Open, needs a real repository; extraction is unit-tested against the documented shapes |
+| Starting the daemon from an extension process under Protected Mode | Open, manual |
+| The same checks in the Copilot app | Open, manual |

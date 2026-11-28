@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { connect } from "node:net";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { Connection } from "../src/protocol/connection.js";
-import type { PendingView, WatchView } from "../src/protocol/methods.js";
+import type { PendingView, ReconcileParams, WatchView } from "../src/protocol/methods.js";
 import { FakeAdapter, flush, startHarness, user, type Harness } from "./helpers.js";
 
 let h: Harness;
@@ -143,6 +143,31 @@ describe("daemon", () => {
     const pending = await adapter.request<PendingView>("watch.pending");
     assert.equal(pending.packets[0]?.state, "consumed");
     assert.equal(adapter.delivered.length, 1);
+  });
+
+  it("resends an admitted packet that a reconnected harness reports lost", async () => {
+    await addWatch();
+    await cycle();
+    h.source.items = [h.source.comment("1", "change")];
+    h.clock.advance(61_000);
+    await cycle();
+    assert.equal(adapter.delivered.length, 1);
+    const first = adapter.last();
+    adapter.close();
+    await flush();
+
+    adapter = await FakeAdapter.connect(h.paths);
+    const asked: ReconcileParams[] = [];
+    adapter.reconcileAnswer = (params) => (asked.push(params), { status: "not-admitted", reason: "queue lost" });
+    await cycle();
+    assert.equal(asked[0]?.packet, first.packet);
+    assert.equal(typeof asked[0]?.sentAt, "number", "the send time is passed for reconciliation");
+    h.clock.advance(31_000);
+    await cycle();
+    assert.equal(adapter.delivered.length, 1, "resent once on the new connection");
+    assert.equal(adapter.last().packet, first.packet);
+    assert.equal(adapter.last().epoch, adapter.epoch);
+    assert.match(adapter.last().text, /change/, "the resend still carries the change");
   });
 
   it("closes a packet that stays unconfirmed, leaving its events visible", async () => {

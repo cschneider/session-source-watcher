@@ -39,7 +39,7 @@ closed.
 | Sending a change message | `session.send({ prompt, mode, displayPrompt, source, clientTurnId })` |
 | Admission receipt | The message ID returned by `session.send` |
 | Consumption and reconciliation | `user.message` events echo the packet ID as `clientTurnId` when the message is consumed; `session.getEvents()` finds them after restarts |
-| Completion | `hooks.onAgentStop`, or an `abort` event, after consumption |
+| Completion | `session.idle`, or an `abort` of the top-level agent, after consumption |
 | Teaching the agent when to watch | `hooks.onSessionStart` returning `additionalContext` |
 | Lifecycle | `hooks.onSessionStart` and `session.on(event)` for `user.message`, `abort` and `session.shutdown` |
 | Own-write reporting | `hooks.onPostToolUse`, for recognized mutating commands on watched resources |
@@ -143,7 +143,7 @@ sequenceDiagram
     S->>M: The agent works on the change
     M->>X: watch_ack(pk-1, handled)
     X->>D: Acknowledge ev-301, ev-302
-    S-->>X: onAgentStop
+    S-->>X: session.idle
     X-->>D: Completed, next packet may be sent
 ```
 
@@ -152,8 +152,8 @@ sequenceDiagram
   `mode: "immediate"`, which interjects into a turn in progress, so only
   decision-relevant changes steer running work.
 - **One outstanding message.** The daemon sends the next packet only after
-  the previous one was acknowledged, or after the agent stopped
-  (`onAgentStop`) following its consumption. A turn that ended without
+  the previous one was acknowledged, or after the session went idle
+  (`session.idle`) following its consumption. A turn that ended without
   `watch_ack` leaves the packet visible as unacknowledged; it is not sent
   again.
 - **Ambiguous sends.** If `session.send` throws or returns no ID, the packet
@@ -161,7 +161,10 @@ sequenceDiagram
   the packet ID as `clientTurnId` proves consumption. Its absence proves
   nothing, because an admitted message appears only once consumed, so the
   packet stays unconfirmed until consumption appears or the daemon closes it
-  after ten minutes, leaving its events visible in `watch_pending`.
+  after ten minutes, leaving its events visible in `watch_pending`. The
+  exception is a resumed session: the runtime does not persist its pending
+  queue, so a message admitted before a `session.resume` and never consumed
+  was lost, and the packet is sent again.
 - **Provenance.** `source: "automation-session-source-watcher"` marks the turn
   as sent on behalf of an automation the user configured, which starts work
   but carries no human authority.
@@ -176,7 +179,7 @@ sequenceDiagram
 | `onSessionStart` (startup or new) | Bind, register tools, add watching guidance to the context |
 | `onSessionStart` (resume) | Rebind with the same native session ID; the daemon reconciles open packets and sends any that queued while the session was closed |
 | `user.message` with a packet's `clientTurnId` | Report the packet consumed |
-| `onAgentStop` or `abort` after consumption | Report the packet completed; the daemon may send the next one |
+| `session.idle` or a top-level `abort` after consumption | Report the packet completed; the daemon may send the next one |
 | `session.shutdown` | Report disconnected; collection continues, packets queue |
 | Session archived in the app | Suspend the session's watches until it is resumed |
 
@@ -241,14 +244,11 @@ The waiter costs no tokens while it waits. It needs the agent to restart it
 after every message, and it stops with the session, so the extension remains
 the preferred integration.
 
-## Verification before relying on it
+## Verification
 
-The first implementation gate for this adapter checks, against the then-current
-SDK:
-
-- `session.send` admission in idle, busy and resumed sessions, and the meaning
-  of its returned ID.
-- Behaviour of `immediate` and `enqueue` when several packets and user messages
-  compete.
-- Hook payloads available for write extraction from common GitHub tools.
-- Extension restart and session resume without duplicate or lost packets.
+`npm run test:live` checks this adapter in real Copilot sessions: admission
+in idle, busy and resumed sessions, `enqueue` and `immediate` delivery,
+completion in Autopilot, the shell tool's hook payload for own writes, and a
+runtime restart without duplicate or lost packets. The results and the
+remaining manual checks are in the
+[verification checklist](../design/copilot-plugin.md#verification-checklist).

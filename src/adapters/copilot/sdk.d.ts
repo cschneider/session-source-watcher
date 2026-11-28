@@ -64,8 +64,8 @@ declare module "@github/copilot-sdk/extension" {
   export type Canvas = { readonly declaration: { id: string } };
   export function createCanvas(options: CanvasOptions): Canvas;
   export function joinSession(config?: {
-    tools?: { definitions?: Tool[] };
+    tools?: { definitions?: Tool[] } | (Tool[] & { definitions?: Tool[] });
     hooks?: SessionHooks;
-    canvases?: { definitions?: Canvas[] };
+    canvases?: { definitions?: Canvas[] } | (Canvas[] & { definitions?: Canvas[] });
   }): Promise<JoinedSession>;
 }

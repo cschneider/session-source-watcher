@@ -131,6 +131,8 @@ export interface DeliverParams {
 export interface ReconcileParams {
   packet: string;
   epoch: number;
+  /** When the packet was last sent (ms since epoch), if it was sent. */
+  sentAt?: number;
 }
 
 export interface ProgressReply {

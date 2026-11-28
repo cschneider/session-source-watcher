@@ -49,11 +49,25 @@ describe("PacketTracker", () => {
     tracker.observe({ type: "user.message", data: { clientTurnId: packet } });
     tracker.observe({ type: "abort", agentId: "sub-1", data: {} });
     assert.deepEqual(reports, [`${packet}:consumed`], "a sub-agent abort is not a stop");
-    tracker.stopped();
+    tracker.observe({ type: "session.idle", data: {} });
     assert.deepEqual(reports, [`${packet}:consumed`, `${packet}:completed`]);
   });
 
-  it("reconciles from history and never claims non-admission", () => {
+  it("waits for Autopilot continuations before completing", () => {
+    const tracker = new PacketTracker();
+    const reports: string[] = [];
+    tracker.report = (packet, status) => reports.push(`${packet}:${status}`);
+    const packet = ulid();
+    tracker.recordSend(packet, "m1", false);
+    tracker.observe({ type: "user.message", data: { clientTurnId: packet, source: "automation-session-source-watcher" } });
+    tracker.observe({ type: "assistant.idle", data: {} });
+    tracker.observe({ type: "user.message", data: { clientTurnId: packet, source: "autopilot" } });
+    assert.deepEqual(reports, [`${packet}:consumed`], "a continuation is neither a new consumption nor the end");
+    tracker.observe({ type: "session.idle", data: {} });
+    assert.deepEqual(reports, [`${packet}:consumed`, `${packet}:completed`]);
+  });
+
+  it("reconciles from history", () => {
     const tracker = new PacketTracker();
     const sent = ulid();
     const failed = ulid();
@@ -64,6 +78,17 @@ describe("PacketTracker", () => {
     assert.equal(tracker.reconcile(failed, []).status, "unknown");
     assert.equal(tracker.reconcile(earlier, [{ type: "user.message", data: { clientTurnId: earlier } }]).status, "completed");
     assert.equal(tracker.reconcile(sent, [{ type: "user.message", data: { clientTurnId: sent } }]).status, "consumed");
+  });
+
+  it("reports non-admission only when the session was resumed after the send", () => {
+    const tracker = new PacketTracker();
+    const lost = ulid();
+    const sentAt = Date.parse("2027-01-04T10:00:00Z");
+    const resumed = [{ type: "session.resume", timestamp: "2027-01-04T10:05:00Z" }];
+    assert.equal(tracker.reconcile(lost, resumed, sentAt).status, "not-admitted");
+    assert.equal(tracker.reconcile(lost, [{ type: "session.resume", timestamp: "2027-01-04T09:00:00Z" }], sentAt).status, "unknown", "resumed before the send");
+    assert.equal(tracker.reconcile(lost, resumed).status, "unknown", "no send time");
+    assert.equal(tracker.reconcile(lost, [...resumed, { type: "user.message", data: { clientTurnId: lost } }], sentAt).status, "completed", "consumed wins");
   });
 });
 

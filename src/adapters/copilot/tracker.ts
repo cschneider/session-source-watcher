@@ -8,6 +8,7 @@ interface Sent {
 
 export interface HistoryEvent {
   type: string;
+  timestamp?: string;
   agentId?: string;
   data?: { clientTurnId?: string } & Record<string, unknown>;
 }
@@ -15,7 +16,9 @@ export interface HistoryEvent {
 /**
  * Tracks watcher messages in one Copilot session: admission, consumption
  * (a user.message echoing the packet ID as clientTurnId) and completion
- * (the top-level agent stopped after consuming it).
+ * (the session went idle, or the top-level agent was aborted, after consuming
+ * it). Autopilot continuations repeat the clientTurnId and end with their own
+ * agent stop, so a stop alone does not mean the work is over.
  */
 export class PacketTracker {
   private readonly sent = new Map<string, Sent>();
@@ -35,12 +38,12 @@ export class PacketTracker {
         this.consumed.add(id);
         this.report(id, "consumed");
       }
-    } else if (event.type === "abort" && !event.agentId) {
+    } else if (event.type === "session.idle" || (event.type === "abort" && !event.agentId)) {
       this.stopped();
     }
   }
 
-  /** The top-level agent stopped: every consumed packet's work is over. */
+  /** The session is idle: every consumed packet's work is over. */
   stopped(): void {
     for (const packet of this.consumed) {
       if (this.completed.has(packet)) continue;
@@ -50,7 +53,7 @@ export class PacketTracker {
   }
 
   /** What this process can prove about a packet, using the persisted history. */
-  reconcile(packet: string, history: readonly HistoryEvent[]): ProgressReply {
+  reconcile(packet: string, history: readonly HistoryEvent[], sentAt?: number): ProgressReply {
     const consumedInHistory = history.some((event) => event.type === "user.message" && event.data?.clientTurnId === packet);
     const sent = this.sent.get(packet);
     if (consumedInHistory || this.consumed.has(packet)) {
@@ -63,6 +66,11 @@ export class PacketTracker {
       return { status: "consumed" };
     }
     if (sent?.messageId && !sent.failed) return { status: "admitted", receipt: sent.messageId };
+    // The pending queue lives in the runtime process: a resume after the send
+    // means the message was dropped unconsumed and can be sent again.
+    if (!sent && sentAt !== undefined && history.some((event) => event.type === "session.resume" && Date.parse(event.timestamp ?? "") > sentAt)) {
+      return { status: "not-admitted", reason: "the session was resumed after the send and the message was never consumed" };
+    }
     return { status: "unknown", reason: sent?.failed ? "send failed; consumption not observed" : "not sent by this process" };
   }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { createCanvas, joinSession, type Canvas, type JoinedSession, type ToolResultObject } from "@github/copilot-sdk/extension";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectDaemon } from "../../protocol/client.js";
@@ -49,6 +49,17 @@ function daemonCommand(): string[] {
   return existsSync(bundled) ? [node, bundled, "daemon"] : ["ssw", "daemon"];
 }
 
+/** Opt-in local trace for live verification; records hook payloads, so keep it off in normal use. */
+function debug(kind: string, data: Record<string, unknown>): void {
+  const file = process.env["SSW_DEBUG_LOG"];
+  if (!file) return;
+  try {
+    appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), kind, ...data }) + "\n", { mode: 0o600 });
+  } catch {
+    // Tracing must never affect the session.
+  }
+}
+
 async function log(message: string, level: "info" | "warning" | "error" = "info"): Promise<void> {
   try {
     await session?.log(`Watcher: ${message}`, { level, ephemeral: level === "info" });
@@ -69,9 +80,11 @@ async function deliver(params: DeliverParams): Promise<ProgressReply> {
       clientTurnId: params.packet,
     });
     tracker.recordSend(params.packet, messageId || undefined, !messageId);
+    debug("send", { packet: params.packet, urgency: params.urgency, messageId: messageId || null });
     return messageId ? { status: "admitted", receipt: messageId } : { status: "unknown", reason: "no message ID returned" };
   } catch (error) {
     tracker.recordSend(params.packet, undefined, true);
+    debug("send", { packet: params.packet, urgency: params.urgency, error: error instanceof Error ? error.message : String(error) });
     return { status: "unknown", reason: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -80,7 +93,9 @@ async function reconcile(params: ReconcileParams): Promise<ProgressReply> {
   if (!session) return { status: "unknown", reason: "session not joined" };
   try {
     const history = await session.getEvents();
-    return tracker.reconcile(params.packet, history as never);
+    const reply = tracker.reconcile(params.packet, history as never, params.sentAt);
+    debug("reconcile", { packet: params.packet, reply });
+    return reply;
   } catch (error) {
     return { status: "unknown", reason: error instanceof Error ? error.message : String(error) };
   }
@@ -130,6 +145,7 @@ async function connect(): Promise<Connection> {
 }
 
 tracker.report = (packet: string, status: ProgressStatus, receipt?: string) => {
+  debug("report", { packet, status });
   void connect()
     .then((connection) => connection.request("packet.progress", { packet, epoch, status, ...(receipt ? { receipt } : {}) }))
     .catch(() => {
@@ -209,11 +225,13 @@ try {
   canvases = [];
 }
 
+// Current SDKs read `.definitions`; protocol-3 SDKs iterate the list directly.
 session = await joinSession({
-  tools: { definitions: tools },
-  ...(canvases.length ? { canvases: { definitions: canvases } } : {}),
+  tools: Object.assign([...tools], { definitions: tools }),
+  ...(canvases.length ? { canvases: Object.assign([...canvases], { definitions: canvases }) } : {}),
   hooks: {
     onSessionStart: async (input) => {
+      debug("onSessionStart", { source: input.source });
       try {
         const connection = await Promise.race([
           connect(),
@@ -229,16 +247,29 @@ session = await joinSession({
     },
     onPostToolUse: (input) => {
       const writes = extractWrites(input.toolName, input.toolArgs, input.toolResult?.textResultForLlm ?? "", watched);
+      debug("onPostToolUse", {
+        toolName: input.toolName,
+        toolArgs: input.toolArgs,
+        resultType: input.toolResult?.resultType,
+        resultText: (input.toolResult?.textResultForLlm ?? "").slice(0, 500),
+        writes,
+      });
       if (writes.length) void connect().then((connection) => connection.request("writes.report", { writes })).catch(() => {});
     },
-    onAgentStop: () => {
-      tracker.stopped();
-      void agent?.request("session.lifecycle", { state: "idle" }).catch(() => {});
+    onAgentStop: (input) => {
+      debug("onAgentStop", { input });
     },
   },
 });
 
-session.on((event) => tracker.observe(event as never));
+session.on((event) => {
+  tracker.observe(event as never);
+  if (event.type === "session.idle") void agent?.request("session.lifecycle", { state: "idle" }).catch(() => {});
+  const traced = event as { type: string; agentId?: string; data?: Record<string, unknown> };
+  if (/^(session\.idle|assistant\.idle|user\.message|abort|session\.mode_changed|session\.resume)$/.test(traced.type)) {
+    debug("event", { type: traced.type, agentId: traced.agentId, source: traced.data?.["source"], clientTurnId: traced.data?.["clientTurnId"] });
+  }
+});
 void connect().catch((error: unknown) => void log(`could not reach the daemon: ${error instanceof Error ? error.message : String(error)}`, "warning"));
 
 const shutdown = () => {

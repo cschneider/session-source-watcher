@@ -238,7 +238,7 @@ export class Delivery {
     if (packet.state === "sending") this.store.run("UPDATE packets SET state = 'unconfirmed' WHERE id = ? AND state = 'sending'", packet.id);
     let reply: ProgressReply;
     try {
-      reply = await withTimeout(link.reconcile({ packet: packet.id, epoch: link.epoch }), ADMISSION_TIMEOUT_MS);
+      reply = await withTimeout(link.reconcile({ packet: packet.id, epoch: link.epoch, ...(packet.sent_at ? { sentAt: packet.sent_at } : {}) }), ADMISSION_TIMEOUT_MS);
     } catch (error) {
       reply = { status: "unknown", reason: error instanceof Error ? error.message : String(error) };
     }
@@ -280,7 +280,9 @@ export class Delivery {
       const binding = this.store.get<BindingRow>("SELECT * FROM bindings WHERE id = ?", bindingId);
       const packet = this.store.get<PacketRow>("SELECT * FROM packets WHERE id = ? AND binding_id = ?", packetId, bindingId);
       if (!binding || !packet || binding.connection_epoch !== epoch || packet.state === "closed") return false;
-      const rank = RANK[packet.state] ?? 0;
+      // An admission by an earlier connection is no evidence for this one: a
+      // restarted harness may have lost its queue, so it can be downgraded.
+      const rank = packet.state === "admitted" && packet.connection_epoch !== epoch ? 0 : (RANK[packet.state] ?? 0);
       switch (status) {
         case "admitted":
           if (rank >= 1) return false;
@@ -303,6 +305,7 @@ export class Delivery {
           return true;
         case "not-admitted":
           if (rank >= 1) return false;
+          this.store.run("UPDATE events SET state = 'queued' WHERE packet_id = ? AND state = 'delivered'", packetId);
           if (packet.attempts >= MAX_ATTEMPTS) {
             this.close(packetId, "undeliverable", now);
           } else {
