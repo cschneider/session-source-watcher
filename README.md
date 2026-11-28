@@ -73,40 +73,30 @@ harness integrations are implemented yet.
 
 ## What it feels like
 
-```text
-You    Open a PR for the fix and address review feedback.
+> **You:** Fix the login bug, open a pull request and take care of the review
+> feedback.
+>
+> **Agent:** Done, the pull request is open. I'll keep an eye on it and pick
+> it up again when the reviewers respond.
 
-Agent  Opened example/project#42. I'm watching its reviews and checks until
-       it merges.                                     [watch w-7 added by agent]
+*Two hours pass. Nothing runs in the conversation, and no tokens are spent.*
 
-       ... two hours pass: the watcher checks every few minutes outside the
-           model; zero tokens are spent ...
+> **Watcher:** News on your pull request: Sam asked for a change, and one test
+> now fails.
+>
+> **Agent:** Sam is right, and the failing test is caused by the same problem.
+> I fixed it, added a test and replied to Sam. Still watching.
 
-Watcher (message to the session)
-       w-7 · example/project#42 · 2 changes · coverage complete
-       1. Review: changes requested by @reviewer on src/cache.ts:88
-          "The cache key ignores the locale."
-       2. Check unit-tests: passed -> failed
+*The next morning.*
 
-Agent  The reviewer is right, and the failing test is the same bug: the key
-       omits the locale. Pushed a fix with a regression test and replied in
-       the review thread. Still watching.                   [acknowledged]
+> **Watcher:** The pull request was merged.
+>
+> **Agent:** Merged. Nothing left to wait for, so I stopped watching it.
 
-       ... the agent's own reply and push are recognised and not echoed back ...
-
-Watcher (message to the session)
-       w-7 · example/project#42 merged by @maintainer.
-
-Agent  Merged. Nothing left to follow, so I stopped watching it.
-                                                       [watch w-7 completed]
-```
-
-Nobody asked for a watch: the agent added one because it was now waiting on a
-review, and cleared it when the pull request merged. When the review came in,
-the watcher sent a message straight into the session that opened the pull
-request, with its history and context. The model ran only when there was
-something to react to. The watcher did not decide to push code; the user's
-request did.
+You never asked the agent to watch anything. It started watching because it
+was waiting for a review, and stopped when the work was done. The news arrived
+in the same conversation, so the agent knew exactly what it was working on.
+And the decision to fix the code came from your request, not from the watcher.
 
 ## What you can watch
 
